@@ -23,6 +23,10 @@ library(rlist)
 
 Load data from API's.
 
+COVID CDC Data
+
+This actually is just a total cumulative sum with a start and end date. NOT a time series with each date. Will have to look for another dataset. May need to get data elsewhere.
+
 ```{r covid-api-call}
 # load up hidden api key
 load_dot_env()
@@ -34,6 +38,79 @@ covid_df <- read.socrata("https://data.cdc.gov/resource/kn79-hsxy.json",
 # save df to data folder
 write_csv(covid_df, paste("./data/us_covid_cases_and_deaths_county_",Sys.Date(),".csv", sep = ""))
 ```
+
+Other data sources.
+Columns I would need would be the following:
+  - city, county?
+  - cum cases, new cases, deaths
+  - date (are there any dates with NA?)
+
+```{r other-covid-data}
+nyc_covid <- "https://data.cityofnewyork.us/resource/rc75-m7u3.json"
+chicago_covid <- "https://data.cityofchicago.org/resource/naz8-j4nc.json"
+la_covid <- "https://data.lacity.org/resource/jsff-uc6b.json"
+```
+
+Let's look at nyc data
+
+```{r nyc-covid}
+nyc_covid_data <- read.socrata(nyc_covid,
+             app_token = Sys.getenv("SOCRATA_API"))
+
+# select only date, case, death
+nyc_simple <- nyc_covid_data %>% 
+  select(date_of_interest, case_count, death_count) %>% 
+  mutate(city = "NYC") %>% 
+  rename(date = date_of_interest, 
+         cases = case_count, 
+         deaths = death_count)
+
+saveRDS(nyc_simple,
+        file = "./data/nyc_simple.rds")
+
+min(nyc_simple$date)
+```
+
+Chicago COVID data
+
+```{r Chicago-COVID}
+chicago_covid_data <- read.socrata(chicago_covid,
+                                   app_token = Sys.getenv("SOCRATA_API"))
+# select only date, case, death
+chicago_simple <- chicago_covid_data %>% 
+  select(lab_report_date, cases_total, deaths_total) %>% 
+  mutate(city = "Chicago") %>% 
+  rename(date = lab_report_date,
+         cases = cases_total,
+         deaths = deaths_total)
+
+saveRDS(chicago_simple,
+        file = "./data/chicago_simple.rds")
+
+chicago_simple %>% 
+  arrange(date) %>% 
+  head(1)
+```
+
+LA COVID Data
+
+```{r LA-COVID-data}
+la_covid_data <- read.socrata(la_covid,
+                              app_token = Sys.getenv("SOCRATA_API"))
+
+la_simple <- la_covid_data %>% 
+  select(date, cases, deaths) %>% 
+  mutate(city = "LA")
+
+saveRDS(la_simple,
+        file = "./data/la_simple.rds")
+
+min(la_simple$date)
+```
+
+Now that we have simple datasets of each city, may need to join and create separate columns for cases and deaths in each city, that is if i want a unique row for each date, which im pretty sure needs to be the case for time series data. Or, I could keep them separate to joing with each Air quality dataset (on date). Or I could join them and also keep them separate to join with Air quality for analysis in that regard.
+
+MIN dates of each NYC = 2/29, Chi = 3/1 and LA 3/24. Could just start in MArch 2020 and say NO DATA for Chi or LA, or could Bfill. Or just start the time series analysis 3/24.
 
 Air quality API call
 
@@ -59,21 +136,19 @@ nyc_county_names = c("Bronx", "Kings", "New York", "Queens", "Richmond")
 nyc_county_fips <- as.list(ny_county_fips[ny_county_fips$county_name %in% nyc_county_names,]$county_code)
 
 
-# get sites by county
-# may need to make this a function
-
-# set length of vector
-nyc_county_sites <- vector("character", length(nyc_county_fips))
-
-# loop through county_fips
-for (i in seq_along(nyc_county_fips)) {
-  nyc_county_sites[i] <- aqs_sites_by_county(
-    stateFIPS = ny_fips,
-    countycode = nyc_county_fips[[i]]
-  )
-}
-
-nyc_county_sites
+# # get sites by county
+# # may need to make this a function
+# 
+# # set length of vector
+# nyc_county_sites <- vector("character", length(nyc_county_fips))
+# 
+# # loop through county_fips
+# for (i in seq_along(nyc_county_fips)) {
+#   nyc_county_sites[i] <- aqs_sites_by_county(
+#     stateFIPS = ny_fips,
+#     countycode = nyc_county_fips[[i]]
+#   )
+# }
 ```
 
 Get parameter codes for pollutants.
