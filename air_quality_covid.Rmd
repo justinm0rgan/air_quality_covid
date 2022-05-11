@@ -226,6 +226,11 @@ Ok, now that I have FIPS codes, let's load up some data. I will start by looking
 
 ## Overview
 
+Research Question
+
+Is there a significant difference in rise of COVID cases and fall of air pollutants (either just PM2.5 or NO2).
+Do rise in COVID cases correlate with increased air quality?
+
 Some stuff to look at:
   - Maybe include a table of pollutants, parameter and description?
   - Aggregate all hourly to daily or 24 hour, don't want to go less then 24 hours
@@ -241,6 +246,7 @@ Seasonality
   - Box plots grouped by year, month, day of different pollutants? Seasonality, yearly, monthly, weekly?
   - summary, colSums for na?
   - can have multiple plots on one par(mfrm = c())
+  - is it additive or multiplicative
 
 Frequency
   - Frequency select min by daily, monthly, yearly if anything missing need to forward fill or backward fill missing data. Fill function in tidyr
@@ -254,6 +260,7 @@ Trends
   - add plot for then add rolling mean as point in base R, can add multiple rolling means can use lines too, add legend
   - 7 day smooths out weekly seasonality but maintains yearly seasonality
   - yearly rolling mean shows long term trend
+  - Is it additive or multiplicative?
 
 COVID Specific
   - pivot longer so that date is in column
@@ -276,6 +283,56 @@ Decompose
     - pattern in random? indicative of a time series thats not additive
     - set decompose function to specific object
       - $seasonal, $trend (using moving average functionality), $random
+      
+Comparing different time series
+  - ARIMA model which would describe each time series
+  - Compare with each pair of models with F-Test:
+    - NYC covid to NYC air quality
+    - Chi covid to Chi air quality
+    - LA covid to LA air quality
+    
+Log
+  - counts number of zeros log 10 = 1 log 100 = 10
+  - taking log of something makes multiplicative makes it additive
+  multiplying on the scale of the number of zeros, becomes additive
+  - multiplying 10 means adding 1 on the log scale
+  - software don't really multiplicate model, if it is multiplicative should use a logarhythmic scale
+  
+Libraries
+  - data.table for converting data to time series format
+  - fpp2 examing seasonality graphically
+  - forecast various functions related to time series
+  - stats for applying tests acf, Ljung-Box Tests
+  - tseries for applying Dickey Fuller test
+  
+Formula
+  - Yt = Tt x St x Rt
+
+Step 1 TS Objects
+  - make time series object with `ts()`
+  - use nyc_simple[,2] to make ts object frequency = 365? or month or week?
+  - can't have missing data, have to do something with it bfill ffill
+  - as trend increases fluctuations are also increasing, this is indicative of multiplicative seasonality.
+  
+Step 2 Basic Plots
+  - plot with base R, type = "l"
+  - ggseaonsalplot split on on year, year.label = T? polar? if it is perfect circle no seasonality
+  if circles shift in same way, suggests regular seasonality
+  - monthplot() lose all sense of annual trend looks at ts object column wise
+  
+Step 3 Decomposition
+  - decompose() type equal too additive or multiplicative
+  - random is after divide by trend, divide by seasonality, this is the error left
+  should have no trend, no seasonality, it should look random
+  - seasonality will always be the same, is a dimensionaless variable
+  - plot deomcpose will give 4 plots in one
+  - forecast problem becomes simply forecasting trend. multiply trend by seasonality
+  randomness (factor) is ignored for forecasting
+  
+
+  
+
+  
   
 
 ```{r pressure, echo=FALSE}
