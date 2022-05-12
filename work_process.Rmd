@@ -1,0 +1,186 @@
+---
+title: "Air Quality Work Process"
+author: "Justin Williams"
+date: "5/12/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Work Process
+
+This document will detail the work process for the Air Quality and COVID project.
+
+Overall idea is too:
+-   Get air quality data aggregated by date for 3 years prior to COVID-19 to assess in time series i.e. decompose with trend, seasonality and randomness.
+-   Maybe show all sites on map?
+-   Forecast next 2 years (COVID-19 years), and look at MAPE or RMSE to verify difference. Can do this with a few different types of models. Possibly ARIMA
+-   Look at COVID cases and decompose as well or use ARIMA
+-   Compare difference between two variances using F-Test (ANOVA)
+
+
+## Overview
+
+Research Question
+
+Is there a significant difference in rise of COVID cases and fall of air pollutants (either just PM2.5 or NO2).
+Do rise in COVID cases correlate with increased air quality?
+
+Some stuff to look at:
+  - Maybe include a table of pollutants, parameter and description?
+  - Aggregate all hourly to daily or 24 hour, don't want to go less then 24 hours
+  - What is the difference in `method_code`? Is there a data dictionary somewhere?
+  - Geospatial map of all stations?
+  - Maybe look a year or two prior to COVID to view diff?
+  - Should I work with date local or GMT?
+  
+Seasonality
+  - Add year, month, day columns to df so can aggregate as such
+  - Format date column as datetime
+  - Line charts with plot function, can have multiple on chart. Maybe this would make sense with multiple chemicals in air quality? I wonder if I can import a dataframe with more then one parameter from the API, if so maybe sum them all together to get a total figure and have different variables to compare?
+  - Box plots grouped by year, month, day of different pollutants? Seasonality, yearly, monthly, weekly?
+  - summary, colSums for na?
+  - can have multiple plots on one par(mfrm = c())
+  - is it additive or multiplicative
+
+Frequency
+  - Frequency select min by daily, monthly, yearly if anything missing need to forward fill or backward fill missing data. Fill function in tidyr
+  - should i say that each station should have data for each day?
+  
+Trends
+  - Rolling means smooth time series by averaging out variations at frequencies
+  - What parameter to take a rolling mean of?
+  - Use **zoo** package to get rolling mean, calculate how many days you want, first arrange desc by year, then group by year then mutate then ungroup which will create a rolling average
+  - Can also do yearly, half-yearly, quartley etc...
+  - add plot for then add rolling mean as point in base R, can add multiple rolling means can use lines too, add legend
+  - 7 day smooths out weekly seasonality but maintains yearly seasonality
+  - yearly rolling mean shows long term trend
+  - Is it additive or multiplicative?
+
+COVID Specific
+  - pivot longer so that date is in column
+  - mutate with lubridate to mdy(), group_by county, date, summarise deaths or cases row
+  the ungroup
+  - this may cumulative total, to change that and look at new cases can use lag function.
+  - to use lag function arrange by date, then group by county then mutate by subtracting cumsum - lag(cumsum, default = 0)
+  - change scale_x_date, can facet wrap by county with scales = "free_y"
+  - trends can effect stationarity, can lead to underestimating future observations.
+  - a dataset is stationary once you remove the trend
+  - use ma() moving average function to get trend, can plot on top of data with plot
+  - subtract data from trend, left with seasonal and random (if additive model)
+  
+Decompose
+  - ts() function?
+  - decompose? plot(decompose(df))
+    - breaks into seasonality, trend, observed, random (residuals)
+    - additive (seasonal+trend+random) 
+    - multiplicative (seasonsalxtrendxrandom) for exponential growth
+    - pattern in random? indicative of a time series thats not additive
+    - set decompose function to specific object
+      - $seasonal, $trend (using moving average functionality), $random
+      
+Comparing different time series
+  - ARIMA model which would describe each time series
+  - Compare with each pair of models with F-Test:
+    - NYC covid to NYC air quality
+    - Chi covid to Chi air quality
+    - LA covid to LA air quality
+    
+Log
+  - counts number of zeros log 10 = 1 log 100 = 10
+  - taking log of something makes multiplicative makes it additive
+  multiplying on the scale of the number of zeros, becomes additive
+  - multiplying 10 means adding 1 on the log scale
+  - software don't really multiplicate model, if it is multiplicative should use a logarhythmic scale
+  
+Libraries
+  - data.table for converting data to time series format
+  - fpp2 examing seasonality graphically
+  - forecast various functions related to time series
+  - stats for applying tests acf, Ljung-Box Tests
+  - tseries for applying Dickey Fuller test
+  
+Formula
+  - Yt = Tt x St x Rt
+  
+Two methods Decompose or Regression (ARIMA)
+
+Decompose
+Step 1 TS Objects
+  - make time series object with `ts()`
+  - use nyc_simple[,2] to make ts object frequency = 365? or month or week?
+  - can't have missing data, have to do something with it bfill ffill
+  - as trend increases fluctuations are also increasing, this is indicative of multiplicative seasonality.
+  
+Step 2 Basic Plots
+  - plot with base R, type = "l"
+  - ggseaonsalplot split on on year, year.label = T? polar? if it is perfect circle no seasonality
+  if circles shift in same way, suggests regular seasonality
+  - monthplot() lose all sense of annual trend looks at ts object column wise
+  
+Step 3 Decomposition
+  - decompose() type equal too additive or multiplicative
+  - random is after divide by trend, divide by seasonality, this is the error left
+  should have no trend, no seasonality, it should look random
+  - seasonality will always be the same, is a dimensionaless variable
+  - plot deomcpose will give 4 plots in one
+  - forecast problem becomes simply forecasting trend. multiply trend by seasonality
+  randomness (factor) is ignored for forecasting
+  - random should have no pattern at all
+  
+  Another type of decompose stl() has error bars for significance
+  Allows for only additive models, because there is no multiplicative option
+  Need to work on log scale
+  Anything between error bars is indistinguishable, or statistically insignificant
+  Smaller the bar the larger the significance
+  
+Measures of Forecasting Error
+  - Mean absolute deviation (MAD)
+  - Mean absolute percentage error (MAPE)
+  - Mean square error (MSE)
+  - Root mean square error (RMSE) - often acts like a std dev around the forecast
+  
+Step 4 Forecast on Decompose - Train/Test  
+  Could make train and test set if I get PM2.5 data for a few years prior to COVID,     show forecast based on trend vs. actually when COVID hit. Compare with MAPE or RMSE   which will tell us how far off as a percentage or a std dev.
+  To do this use the `window()` function to create a train/test set from`ts()` object with start and end args.
+  Plot using `autoplot()` for train + `autolayer()` for test `guide(color = guide_legend(title="Forecast))`
+  
+  Random walk with Drift procedure - method forecasts next period value as per amount of change over time (called the drift) is evaluated the average change seen in past data.
+get log of and decompose train =  `stl(log(ts_train), s.window = 'p')` if seasonal data select p for periodic
+forecast on log decomposition of train = `forecast(decompose_train_log, 
+                                          method = "rwdrift", h = ?(freq))
+                                          default use loess smoother
+then plot will be done on the log
+
+Step 4 Accuracy measures
+  - vec2 <- 10^cbind(log10(ts_test), as.data.frame(forecast(ts_decompose_train_log, method = "rwdrift", h = freq ))[,1]))
+  ts.plot(Vec2, col =c("blue", "red"), main = title)
+  RMSE2 <- round(sqrt(sum(((Vec2[,1]-Vec2[,2]^2/length(Vec2[,1]))),4)
+  MAPE2 <- round(mean(abs(Vec2[,1]-Vec[,2])/Vec2[,1]),4)
+  
+  RMSE explanation std dev of forecast
+  MAPE percentage error
+  
+Other Forecast methods
+Exponential Smoothing? - extension of moving (rolling) average method where more recent observations get higher weight, sometimes called exponentially
+  - issue is doesn't take into account seasonality
+  
+`ses()` uses same forecast for each t (trending with the data)
+  
+`holt()` allows us to incorporate trend
+
+Holt-Winters takes seasonality into account.(simple exp smoothing)
+  - use `hw(ts_train, h=freq, seasonal = "multiplicative")` 
+  - plot(forecast())
+  - has AIC and BIC for model accuracy
+  - RMSE and MAPE to compare forecast vs. actual
+  
+
+Stationarity series who's statistical characteristics are not changing over time
+mean and variance are the same over time, and
+Auto-correlation?
+Partial auto-correlation?
+ARIMA?
+SARIMA?
