@@ -1,0 +1,266 @@
+---
+title: "Air Quality COVID - Data Loading"
+author: "Justin Williams"
+date: "5/7/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load-packages}
+library(tidyverse)
+library(dotenv)
+library(RSocrata)
+library(RAQSAPI)
+library(jsonlite)
+library(rlist)
+```
+
+## Load data
+
+### COVID Open data.
+
+This actually is just a total cumulative sum with a start and end date. NOT a time series with each date. Will have to look for another dataset. May need to get data elsewhere.
+
+```{r covid-api-call}
+# load up hidden api key
+load_dot_env()
+
+# import datasets to R
+covid_df <- read.socrata("https://data.cdc.gov/resource/kn79-hsxy.json",
+             app_token = Sys.getenv("SOCRATA_API"))
+
+# save df to data folder
+write_csv(covid_df, paste("./data/us_covid_cases_and_deaths_county_",Sys.Date(),".csv", sep = ""))
+```
+
+### Other data sources.
+Columns I would need would be the following:
+  - city, county?
+  - cum cases, new cases, deaths
+  - date (are there any dates with NA?)
+
+```{r other-covid-data}
+nyc_covid <- "https://data.cityofnewyork.us/resource/rc75-m7u3.json"
+chicago_covid <- "https://data.cityofchicago.org/resource/naz8-j4nc.json"
+la_covid <- "https://data.lacity.org/resource/jsff-uc6b.json"
+```
+
+Let's look at NYC COVID data
+
+```{r nyc-covid}
+nyc_covid_data <- read.socrata(nyc_covid,
+             app_token = Sys.getenv("SOCRATA_API"))
+
+# select only date, case, death
+nyc_simple <- nyc_covid_data %>% 
+  select(date_of_interest, case_count, death_count) %>% 
+  mutate(city = "NYC") %>% 
+  rename(date = date_of_interest, 
+         cases = case_count, 
+         deaths = death_count)
+
+saveRDS(nyc_simple,
+        file = "./data/nyc_simple.rds")
+```
+
+Chicago COVID data
+
+```{r Chicago-COVID}
+chicago_covid_data <- read.socrata(chicago_covid,
+                                   app_token = Sys.getenv("SOCRATA_API"))
+# select only date, case, death
+chicago_simple <- chicago_covid_data %>% 
+  select(lab_report_date, cases_total, deaths_total) %>% 
+  mutate(city = "Chicago") %>% 
+  rename(date = lab_report_date,
+         cases = cases_total,
+         deaths = deaths_total)
+
+saveRDS(chicago_simple,
+        file = "./data/chicago_simple.rds")
+```
+
+LA COVID Data
+
+```{r LA-COVID-data}
+la_covid_data <- read.socrata(la_covid,
+                              app_token = Sys.getenv("SOCRATA_API"))
+
+la_simple <- la_covid_data %>% 
+  select(date, cases, deaths) %>% 
+  mutate(city = "LA")
+
+saveRDS(la_simple,
+        file = "./data/la_simple.rds")
+```
+
+MIN dates of each NYC = 2/29, Chi = 3/1 and LA 3/24. Could just start in MArch 2020 and say NO DATA for Chi or LA, or could Bfill. Or just start the time series analysis 3/24.
+
+### Air quality
+
+Make API call.
+
+```{r aqs-api-call}
+aqs_credentials(username = "justinmorganwilliams@gmail.com",
+                key = Sys.getenv("AQS_API"))
+```
+
+Get state and county use NYC as proxy, will most likely do LA, Chicago and New York.
+
+```{r get-fips-codes, warning=FALSE}
+# get ny state fips
+state_fips <- aqs_states()
+ny_fips <- state_fips[state_fips$state == "New York",]$stateFIPS
+
+# set county fips df
+ny_county_fips <- aqs_counties_by_state(ny_fips)
+
+# create list of county names in nyc
+nyc_county_names = c("Bronx", "Kings", "New York", "Queens", "Richmond")
+
+# get nyc county fips
+nyc_county_fips <- as.list(ny_county_fips[ny_county_fips$county_name %in% nyc_county_names,]$county_code)
+```
+
+Get parameter codes for pollutants.
+
+```{r parameter-codes}
+parm_json <- fromJSON("https://aqs.epa.gov/data/api/list/parametersByClass?email=test@aqs.api&key=test&pc=CRITERIA", flatten = T)
+
+parm_json$Data
+```
+
+Look at the daily summary by county
+
+```{r daily-summmary-county}
+nyc_county_dailysummary <- map(.x = nyc_county_fips,
+     aqs_dailysummary_by_county,
+     parameter = "88101",
+       bdate = as.Date("20200301",
+                  format = "%Y%m%d"),
+       edate = as.Date("20200331",
+                  format = "%Y%m%d"),
+       stateFIPS = ny_fips) %>% 
+  map_dfr(list.flatten)
+```
+
+Let's try and aggregate so that I have one record for each day.
+
+```{r agg-dailysumm}
+nyc_county_dailysummary %>% 
+  filter(sample_duration != "1 HOUR") %>% 
+  group_by(date_local) %>% 
+  summarise(mean_measurement = mean(arithmetic_mean))
+```
+
+Ok, this is the structure of the data we will work with. Now we need to get data for 2017, 2018, 2019, 2020 and 2021. I know API limits per year calls, so let's try one year at a time. First create function to apply for each county.
+
+```{r year-api-function}
+# make api call function
+year_county_aqs <- function(county_fips, 
+                            state_fips,
+                            bdate, edate, parameter = "88101") {
+  map(.x = county_fips,
+     aqs_dailysummary_by_county,
+     parameter = parameter,
+       bdate = as.Date(bdate,
+                  format = "%Y%m%d"),
+       edate = as.Date(edate,
+                  format = "%Y%m%d"),
+       stateFIPS = state_fips) %>% 
+  map_dfr(list.flatten)
+}
+
+# function to agg by day and create paramter avg column
+daily_summary <- function(df) {
+  df %>% 
+    filter(sample_duration != "1 HOUR") %>% 
+    group_by(date_local) %>% 
+    summarise(mean_measurement = mean(arithmetic_mean))
+}
+```
+
+Get each years data and aggregate.
+
+```{r get-each-year}
+# get 2017 daily summary
+nyc_county_dailysummary_2017 <- 
+  year_county_aqs(county_fips = nyc_county_fips,
+                state_fips = ny_fips,
+                bdate = "20170101",
+                edate = "20171231")
+
+nyc_county_dailysummary_2017_simple <- daily_summary(nyc_county_dailysummary_2017)
+
+# get 2018 daily summary
+nyc_county_dailysummary_2018 <- 
+  year_county_aqs(county_fips = nyc_county_fips,
+                state_fips = ny_fips,
+                bdate = "20180101",
+                edate = "20181231")
+
+nyc_county_dailysummary_2018_simple <- daily_summary(nyc_county_dailysummary_2018)
+
+# get 2019 daily summary
+nyc_county_dailysummary_2019 <- 
+  year_county_aqs(county_fips = nyc_county_fips,
+                state_fips = ny_fips,
+                bdate = "20190101",
+                edate = "20191231")
+
+nyc_county_dailysummary_2019_simple <- daily_summary(nyc_county_dailysummary_2019)
+
+# get 2020 daily summary
+nyc_county_dailysummary_2020 <- 
+  year_county_aqs(county_fips = nyc_county_fips,
+                state_fips = ny_fips,
+                bdate = "20200101",
+                edate = "20201231")
+
+nyc_county_dailysummary_2020_simple <-daily_summary(nyc_county_dailysummary_2020)
+
+# get 2021 daily summary
+nyc_county_dailysummary_2021 <- 
+  year_county_aqs(county_fips = nyc_county_fips,
+                state_fips = ny_fips,
+                bdate = "20210101",
+                edate = "20211231")
+
+nyc_county_dailysummary_2021_simple <-daily_summary(nyc_county_dailysummary_2021)
+```
+
+Save each year as RDS so don't have to keep making unnecessary API calls.
+
+```{r view-dataframes}
+Filter(function(x) is(x, "data.frame"), mget(ls()))
+```
+
+
+```{r save-yearly-aqs}
+yearly_aqs <- c("nyc_county_dailysummary_2017",
+                "nyc_county_dailysummary_2017_simple",
+                "nyc_county_dailysummary_2018",
+                "nyc_county_dailysummary_2018_simple",
+                "nyc_county_dailysummary_2019",
+                "nyc_county_dailysummary_2019_simple",
+                "nyc_county_dailysummary_2020",
+                "nyc_county_dailysummary_2020_simple",
+                "nyc_county_dailysummary_2021",
+                "nyc_county_dailysummary_2021_simple")
+
+# loop through dataframe list and save as rds
+for (i in 1:length(yearly_aqs)) {
+  savefile <- paste0(paste0("./data/", yearly_aqs[i], ".Rds"))
+  saveRDS(get(yearly_aqs[i]), file = savefile)
+  print(paste("Dataframe Saved: ", yearly_aqs[i]))
+}
+```
+
+
+ 
+
+
+  
