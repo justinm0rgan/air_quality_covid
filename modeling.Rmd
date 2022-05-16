@@ -1,0 +1,77 @@
+---
+title: "Modeling"
+author: "Justin Williams"
+date: "5/14/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load-apckages, warning=FALSE}
+library(tidyverse)
+library(lubridate)
+library(prophet)
+library(forecast)
+library(tseries)
+```
+
+
+## Modeling
+
+This notebook will deal exclusively with modeling of the time series data. 
+
+  - dickey-fuller test to confirm non-stationarity or stationariy
+    - null = data is not stationary
+    - alt = data is stationary
+    - for data to be stationary ADF test should have p-value <= sig level
+  - Random Drift?
+  - ARIMA model https://github.com/MGCodesandStats/energy-weather-modelling/blob/master/arima-weather-dublin-airport.R
+    - plot diagnostics
+    - using gridsearch https://towardsdatascience.com/setting-arima-model-parameters-in-r-grid-search-vs-auto-arima-19055aacafdf
+  - SARIMA model
+    - plot diagnostics
+  - SARIMAX?
+  - Prophet
+    - prophet_plot_compenents
+    - customizing holidays and events? maybe day of lockdown? and anomalous day?
+    - removing outliers?
+
+Let's look at splitting off the first 3 years as train and last 2 as test
+
+```{r train-test}
+train_ts_nyc_2 <- window(ts_nyc_2, start = decimal_date(as.Date("2017-01-01")), 
+                         end =decimal_date(as.Date("2019-12-31")))
+test_ts_nyc_2 <- window(ts_nyc_2, start = decimal_date(as.Date("2020-01-01")), 
+                        end = decimal_date(as.Date("2021-12-31")))
+```
+
+Plot with autoplot
+
+```{r autoplot-train-test}
+autoplot(train_ts_nyc_2) + autolayer(test_ts_nyc_2) +
+  guides(color = guide_legend(title = "Forecast"))
+```
+Maybe aggregate by week or month and then redo graph? Very hard to see whats going.
+Also what is that anomaly halfway through 2021?
+
+
+Try with random walk.
+
+```{r random-walk}
+train_stl <- stl(log(train_ts_nyc), s.window = 'p')
+nyc_forecast <- forecast(train_stl, method = "rwdrift", h = 24)
+plot(nyc_forecast)
+```
+
+Get it out of Log scale and look at accuracy measures
+
+```{r}
+vec <- 10^cbind(log10(test_ts_nyc), as.data.frame(forecast(train_stl,
+                                                           method = "rwdrift",
+                                                           h = 12))[,1])
+```
+
+
+
