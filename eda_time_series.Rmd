@@ -1,0 +1,534 @@
+---
+title: "Time Series"
+author: "Justin Williams"
+date: "5/12/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load-packages, warning=FALSE}
+library(tidyverse)
+library(fpp2)
+library(ggfortify)
+library(forecast)
+library(data.table)
+library(scales)
+library(lubridate)
+library(RColorBrewer)
+library(viridis)
+library(ggseas)
+library(sf)
+library(nycgeo)
+library(mapview)
+library(mapboxapi)
+library(tmap)
+```
+
+
+## Overivew
+
+This notebook will perform time series analysis on the air quality dataset.
+
+### Load in data
+
+Load in simple dataframes of air quality data and combine into one dataframe for 
+time series analysis.
+
+```{r load-air-simple-quality-data}
+simple_aqs <- list.files(
+  path = "/Users/justinwilliams/projects/air_quality_covid/data/simple_yearly/", 
+  pattern = ".Rds", full.names = T) %>% 
+  map_dfr(readRDS) %>% #combine into one df
+  mutate(date_local = as.Date(date_local))
+
+simple_aqs
+```
+
+Load in all data frames separately for some EDA
+
+```{r load-in-full-df}
+# list of paths to dfs
+filenames <- list.files(
+  path = "/Users/justinwilliams/projects/air_quality_covid/data/",
+  pattern = ".rds")
+
+# create list to name dfs
+df_names <- filenames %>% str_remove(".rds")
+
+# loop through each name and to each df 
+for (i in df_names) {
+  filepath <- file.path("/Users/justinwilliams/projects/air_quality_covid/data/",
+                        paste(i, ".rds", sep=""))
+  assign(i, readRDS(filepath))
+}
+
+```
+
+### EDA
+
+  - lineplot
+    - by day
+    - by week?
+  - histogram
+  - box and whisker plots, divided on year
+  - line plot divded on year
+  - barplots aggregated by year
+  - mapping of test sites
+  - heatmap of yearly data
+  - lag scatter plot
+  
+  - autocorrelation plot
+  
+Questions to answer:
+  - Is a non-seasonal, additive seasonality or multiplicative seasonality (constant, negative or upward)
+  - What is the ridiculous outlier in summer of 2021
+
+### Bar plots
+
+Plot NYC Open AQ data which is annual mean.
+
+```{r nyc-aq-open-data-bar}
+nyc_aq %>% 
+  filter(start_date >= c("2017-01-01") &
+           measure_info != "ppb" &
+           startsWith(time_period, "Annual"))%>% 
+  group_by(start_date, time_period, measure_info) %>% 
+  summarise(mean_measurement = mean(data_value, na.rm = T)) %>% 
+  arrange((start_date)) %>% 
+  ggplot() +
+    geom_bar(aes(y = mean_measurement, x = start_date),
+             stat = "identity") +
+  coord_flip()
+```
+
+ Mean per year based on EPA data.
+ 
+```{r 2020-mean-aqs-data}
+simple_aqs %>% 
+  group_by(year = year(date_local)) %>% 
+  summarise(mean_per_year = mean(mean_measurement)) %>%
+  ggplot() +
+    geom_bar(aes(y = mean_per_year, x = year, fill = factor(year)),
+           stat = "identity", alpha = 0.8) +
+    coord_flip() +
+    scale_fill_manual(values = brewer_pal(palette = 3)(7)[3:7]) +
+    labs(y = "PM2.5", x = "", title = "Mean PM2.5 per Year", fill = "") +
+    theme_minimal() +
+    theme(plot.title.position = "plot",
+          plot.title = element_text(hjust = 0.5))
+```
+
+Median per year
+
+```{r median-year}
+simple_aqs %>% 
+  group_by(year = year(date_local)) %>% 
+  summarise(median_per_year = median(mean_measurement)) %>%
+  ggplot() +
+  geom_bar(aes(y = median_per_year, x = year),
+           stat = "identity") +
+  coord_flip()
+```
+
+
+### Grouped bar charts
+
+Let's group bar charts by month and facet wrap with year to get some idea of seasonality.
+
+```{r grouped-bar-year}
+simple_aqs %>% 
+  mutate(year = year(date_local),
+         month = month(date_local,
+                       label = T,
+                       abbr = T)) %>% 
+  group_by(year, month) %>% 
+  summarise(mean_month = mean(mean_measurement)) %>% 
+  ggplot(aes(fill = factor(year))) +
+    geom_bar(aes(x = month, y = mean_month),
+             stat = "identity", alpha = 0.8) +
+    facet_wrap(~year, scales = "free_y") +
+    scale_fill_manual(values = brewer_pal(palette = 3)(7)[3:7]) +
+    labs(x = "", y = "PM2.5", 
+         title = "Mean PM2.5 per Month",
+         fill = "") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 60, hjust = 1),
+          plot.title.position = "plot",
+          plot.title = element_text(hjust = 0.5)) +
+    theme(legend.position = c(0.85, 0.2))
+
+```
+
+Let's group by month agnostic to year
+
+```{r group-month-agnostic-year}
+simple_aqs %>% 
+  mutate(month = month(date_local,
+                       label = T,
+                       abbr = T)) %>% 
+  group_by(month) %>% 
+  summarise(mean_month = mean(mean_measurement)) %>% 
+  ggplot() +
+    geom_bar(aes(x = month, y = mean_month),fill = muted("Blue"),
+             stat = "identity", alpha = 0.8) +
+    labs(x = "", y = "PM2.5", 
+         title = "Mean PM2.5 per Month (2017 - 2021)",
+         fill = "")  +
+    scale_fill_brewer(palette = "Set3") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 60, hjust = 1),
+          plot.title.position = "plot",
+          plot.title = element_text(hjust = 0.5),
+          legend.position = "none")
+```
+
+### Mapping test sites
+
+We have lat-long but need to create geometry from the coordinates.
+Let's isolate one year of full dataset and grab the sites and names and create a smaller df we can use to 
+
+```{r}
+nyc_county_dailysummary_2017
+```
+
+```{r create-sf-object}
+# get sites, county, site address and site number
+nyc_sites_sf <- st_as_sf(nyc_county_dailysummary_2017,
+         coords = c("longitude","latitude"),
+         crs = 4326) %>% 
+  st_transform(2263) %>% 
+  group_by(county, site_address, site_number) %>% 
+  summarise()
+
+# get nyc geography
+nyc_nta <- nyc_boundaries(
+  geography = "nta"
+) %>%
+  st_transform(2263)
+
+# join site with nta to get names in df
+nyc_sites_sf_nta <- nyc_sites_sf %>% 
+  st_join(nyc_nta)
+
+# list of test sites with nta_name
+options(knitr.kable.NA = '')
+nyc_sites_sf_nta %>% 
+  st_drop_geometry() %>% 
+  select(NTA = nta_name, Borough = borough_name) %>% 
+  knitr::kable(format = "simple",
+    caption = "Neighborhood Tabulation Areas and County of Air Quality test sites")
+```
+
+Preview with mapview
+
+```{r map-nyc-test-sites}
+mapview_nyc_test_sites <- nyc_sites_sf_nta %>% 
+  mapview(
+    col.regions = "red",
+    legend = T,
+    layer.name = "NYC Air Quality Test Sites",
+    alpha = 0.8,
+    cex = 4.5
+  ) +
+  mapview(nyc_nta,
+          col.regions = c("lightblue", "deepskyblue4",
+                               muted("blue"),
+                               muted("purple"), "darkblue"),
+          zcol = "borough_name",
+          layer.name = "Borough",
+          legend.opacity = 0.8)
+
+mapshot(mapview_nyc_test_sites,
+        file = "./images/mapview_nta_test_sites.png")
+
+mapview_nyc_test_sites
+```
+
+### Summary statistics
+
+Let's generate some summary stats of the distributions by year.
+
+```{r summary-stats}
+simple_aqs %>% 
+  mutate(year = year(date_local)) %>% 
+  group_by(year) %>% 
+  summarize(min = round(min(mean_measurement),2),
+            q1 = round(quantile(mean_measurement, 0.25),2),
+            median = round(median(mean_measurement),2),
+            mean = round(mean(mean_measurement),2),
+            q3 = round(quantile(mean_measurement, 0.75),2),
+            max = round(max(mean_measurement),2))
+```
+
+There is an extreme outlier in 2021. Let's try and isolate that particular record.
+
+```{r 2021-outlier}
+simple_aqs %>% 
+  arrange(desc(mean_measurement)) %>% 
+  head(5)
+```
+
+Looks like it was July 20th 2021. Google search revealed that this is the day smoke from the fires in the Western US and Canada made its way across the continent and caused high air pollution on the each coast.
+https://www.nytimes.com/2021/07/20/us/wildfire-smoke-new-york-city.html
+
+Let's look at dates around that time.
+
+```{r wildfires-air-pollution-july-2021}
+simple_aqs %>% 
+  filter(date_local >= "2021-07-19" &
+           date_local <= "2021-07-31")
+```
+
+Looks like it was pretty much a one day event things kind of went back to normal thereafter. Maybe it came back around July 27th? But other then that looks normal.
+
+### Histograms
+
+Let's look at some of the distributions of PM2.5 by year
+
+```{r hist-pm2.5-year}
+simple_aqs %>% 
+  mutate(year = year(date_local)) %>%
+  group_by(year) %>% 
+  ggplot(aes(x = mean_measurement,fill = factor(year,))) +
+    geom_histogram(position = "identity", binwidth = 0.7,
+                   alpha = 0.8) +
+    facet_wrap(~year, scales = "free") +
+    scale_fill_manual(values = brewer_pal(palette = 3)(7)[3:7]) +
+    theme_minimal() +
+    labs(x = "PM2.5", y = "Count", 
+         title = "Distribution of Mean PM2.5 Year",
+         fill = "") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 60, hjust = 1),
+          plot.title.position = "plot",
+          plot.title = element_text(hjust = 0.5)) +
+    theme(legend.position = c(0.85, 0.2))
+```
+This shows the outrageous outlier in 2021, is this an error? Let;s confirm with some boxplots. Otherwise pretty normal.
+
+Will prob need to zoom in on each individually to see how normal they really are, but they all seem skewed to the right. 
+
+### Boxplots
+
+Side by side boxplots separated by year. 
+
+```{r boxplots}
+simple_aqs %>% 
+  mutate(year = year(date_local)) %>%
+  group_by(year) %>% 
+  ggplot(aes(x = mean_measurement,fill = factor(year,))) +
+    geom_boxplot(position = "identity", binwidth = 0.7,
+                   alpha = 0.8) +
+    facet_wrap(~year, scales = "free") +
+    scale_fill_manual(values = brewer_pal(palette = 3)(7)[3:7]) +
+    theme_minimal() +
+    labs(x = "", y = "", fill = "") +
+    theme_minimal() +
+    theme(legend.position = c(0.85, 0.2)) +
+    coord_flip()
+```
+
+Let's isolate 2021
+
+```{r 2021-box}
+simple_aqs %>% 
+  mutate(year = year(date_local)) %>%
+  group_by(year) %>%
+  filter(year == 2021) %>% 
+  ggplot(aes(x = mean_measurement,fill = factor(year,))) +
+    geom_boxplot(position = "identity", binwidth = 0.7,
+                   alpha = 0.8) +
+    theme_minimal() +
+    coord_flip() +
+    theme(legend.position = "None")
+
+```
+
+
+### Line plots  
+Let's do a simple line plot
+
+```{r simple-plot}
+# 3 years of data 2017:2019
+plot(simple_aqs[1:1095,], type = "l")
+```
+Looks like there is a slight trend, some seasonality and a bunch of randomness.
+Let's make this a time series and re-plot.
+
+```{r create-ts-object}
+ts_nyc_2 <- ts(simple_aqs$mean_measurement, start = decimal_date(as.Date("2017-01-01")),
+               frequency = 365)
+```
+
+Let's replot `ts()` object
+
+```{r ts-plot}
+plot(ts_nyc_2, start = c(2017,01), end = c(2019, 12))
+ts_nyc_2
+```
+
+Try this in ggplot
+
+```{r ggplot-line}
+simple_aqs %>% 
+  ggplot(aes(x = date_local, y = mean_measurement)) + 
+    geom_line() +
+    theme_minimal() +
+    labs(x = "", y = "PM2.5 (ug/m3)", 
+         title = "Mean PM2.5 per Day",
+         color = "") +
+    theme_minimal() +
+    theme(plot.title.position = "plot",
+          plot.title = element_text(hjust = 0.5))
+```
+
+
+Separate by year.
+
+```{r by-year}
+ggseasonplot(ts_nyc_2,
+             year.labels = T,
+             continuous = T,
+             xlab = "Time",
+             ylab = "PM2.5",
+             main = "PM2.5 by year") +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+  theme_minimal()
+```
+GGseasonal plot doesn't seem to let me customize x-axis date breaks. 
+Let's try plotting something like this with the dateframe.
+
+```{r ggplot-line-chart-group-year}
+simple_aqs %>%
+  mutate(year = year(date_local),
+         month = month(date_local,
+                       label = T,
+                       abbr = T)) %>% 
+  group_by(year, month) %>% 
+  summarise(mean_month = mean(mean_measurement)) %>% 
+  ggplot(aes(month, mean_month, 
+             group = factor(year),
+             color = factor(year))) +
+    geom_line(lwd = 2) +
+    scale_color_manual(values = brewer.pal(6,"Dark2")) +
+    theme_minimal() +
+    labs(x = "", y = "PM2.5 (ug/m3)", 
+         title = "Mean PM2.5 per Month by Year",
+         color = "") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 60, hjust = 1),
+          plot.title.position = "plot",
+          plot.title = element_text(hjust = 0.5)) +
+    theme(legend.position = c(0.91, 0.8))
+
+```
+
+
+Let's zoom in on July 2021 to get a visual of the spike.
+
+```{r line-plot-july-2021}
+simple_aqs %>% 
+  ggplot(aes(x = date_local, y = mean_measurement)) +
+    geom_line(color = "steelblue",
+              lwd = 1, alpha = 0.8) +
+    geom_point(size = 2) +
+    theme_minimal() +
+    labs(x = "", y = "PM2.5 (ug/m3)", title = "July 2021 Mean PM2.5 per Day") +
+    theme(axis.text.x = element_text(angle = 60, hjust = 1),
+          plot.title.position = "plot",
+          plot.title = element_text(hjust = 0.5)) +
+    scale_x_date(limit = c(as.Date("2021-07-01"), as.Date("2021-07-31"))) 
+```
+
+
+### Decompose
+
+Let's try out decompose
+
+```{r decompose-ts-object}
+nyc_decompose_ts_2 <- decompose(ts_nyc_2)
+plot(nyc_decompose_ts_2)
+```
+Let's use the **ggseas** package to get a better looking version.
+
+```{r ggseas-decompose}
+simple_aqs %>%
+  ggsdc(aes(date_local,
+            mean_measurement),
+        frequency = 365,
+        method = "decompose",
+        facet.titles = c("Original Series",
+                         "Underying Trend",
+                         "Seasonal patterns",
+                         "Residual Randomness")) +
+    geom_line() +
+    theme_minimal() +
+    labs(x = "Year", y="", title = "Decomposition of PM2.5 2017 - 2021") +
+    theme(plot.title.position = "plot",
+          plot.title = element_text(hjust = 0.5))
+```
+
+
+Trend varies, but looks like it starts trending down once 2020 hits, then goes back up in 2021 with a huge spike towards the summer (extreme wildfires). There does seem to be significant seasonality, spiking in the summer and winter. 
+
+Let's try and adjust for seasonality.
+
+```{r adjust-seasonality-by-year}
+
+# aggregate by month
+month_avg <- simple_aqs %>% 
+  mutate(year = year(date_local),
+         month = month(date_local,
+                       label = T,
+                       abbr = T)) %>% 
+  group_by(year, month) %>% 
+  summarise(mean_month = mean(mean_measurement))
+
+# create ts object
+month_avg_ts <-  ts(month_avg, frequency = 12, start = c(2017,01))
+
+# convert back to df to get floating datetime
+month_avg_df <- tsdf(month_avg_ts)
+
+# plot with seasonality adjustment
+month_avg_df %>% 
+  ggplot(aes(x, mean_month)) + 
+    geom_point() +
+    stat_seas(col = "steelblue",
+              lwd = 1, alpha = 0.8) +
+    theme_minimal() +
+    labs(x = "", y="PM2.5 (ug/m3)", title = "Seasonally Adj Mean Montly PM2.5 2017 - 2021") +
+    theme(plot.title.position = "plot",
+          plot.title = element_text(hjust = 0.5))
+```
+
+### Rolling Average
+
+General rolling average graph with ggplot.
+
+```{r rolling-averages}
+simple_aqs %>% 
+  ggplot(aes(x = date_local, y = mean_measurement)) +
+    geom_line(color = "grey75") +
+    stat_rollapplyr(width = 20, 
+                    align = "center",
+                    lwd = 1) +
+    labs(x = "", y = "PM2.5 (ug/m3)", title = "Rolling Average PM2.5 by Year",
+         color = "") +
+    theme_minimal() +
+    theme(plot.title.position = "plot",
+          plot.title = element_text(hjust = 0.5)) +
+    theme(legend.position = c(0.85, 0.2))
+```
+
+
+### NYC Covid data EDA
+
+Some brief EDA on NYC Covid data to get an idea of rise and fall of COVID cases in 2020 and 2021.
+
+
+
+
