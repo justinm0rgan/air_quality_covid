@@ -184,3 +184,8 @@ Auto-correlation?
 Partial auto-correlation?
 ARIMA?
 SARIMA?
+
+Maybe these work better for daily data?
+library(tsibble)
+library(fable)
+
