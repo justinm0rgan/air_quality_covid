@@ -177,7 +177,8 @@ year_county_aqs <- function(county_fips,
 # function to agg by day and create paramter avg column
 daily_summary <- function(df) {
   df %>% 
-    filter(sample_duration != "1 HOUR") %>% 
+    filter(sample_duration != "1 HOUR",
+           pollutant_standard == "PM25 24-hour 2012") %>% 
     group_by(date_local) %>% 
     summarise(mean_measurement = mean(arithmetic_mean))
 }
@@ -252,15 +253,34 @@ yearly_aqs <- c("nyc_county_dailysummary_2017",
                 "nyc_county_dailysummary_2021_simple")
 
 # loop through dataframe list and save as rds
+# if is simple version save in next level down dir
 for (i in 1:length(yearly_aqs)) {
+  if(!endsWith(yearly_aqs[i], "simple")){
   savefile <- paste0(paste0("./data/", yearly_aqs[i], ".Rds"))
   saveRDS(get(yearly_aqs[i]), file = savefile)
   print(paste("Dataframe Saved: ", yearly_aqs[i]))
+  } else {
+    savefile <- paste0(paste0("./data/simple_yearly/", yearly_aqs[i], ".Rds"))
+    saveRDS(get(yearly_aqs[i]), file = savefile)
+    print(paste("Dataframe Saved: ", yearly_aqs[i]))
+  }
 }
 ```
 
-
+One last Air Quality dataset from Open Data NYC.
  
+```{r air-quality-open-data-nyc}
+nyc_aq <- read.socrata(
+             url = "https://data.cityofnewyork.us/resource/c3uy-2p5r.json",
+             app_token = Sys.getenv("SOCRATA_API")) %>% 
+             mutate(data_value = as.numeric(data_value))
+glimpse(nyc_aq)
+```
+ These are averages over various periods of time, not daily measurements. Although it does show a pretty significant decrease overall in 2020 with 6.32 mean mcg of PM2.5. 
+ 
+```{r save-nyc-aq}
+saveRDS(nyc_aq,
+        file = "./data/nyc_aq.rds")
+```
 
 
-  
