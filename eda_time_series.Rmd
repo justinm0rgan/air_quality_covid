@@ -45,6 +45,9 @@ simple_aqs <- list.files(
   mutate(date_local = as.Date(date_local))
 
 simple_aqs
+
+saveRDS(object = simple_aqs,
+        file = "./data/simple_yearly/simple_aqs.rds")
 ```
 
 Load in all data frames separately for some EDA
@@ -176,6 +179,28 @@ simple_aqs %>%
              stat = "identity", alpha = 0.8) +
     labs(x = "", y = "PM2.5", 
          title = "Mean PM2.5 per Month (2017 - 2021)",
+         fill = "")  +
+    scale_fill_brewer(palette = "Set3") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 60, hjust = 1),
+          plot.title.position = "plot",
+          plot.title = element_text(hjust = 0.5),
+          legend.position = "none")
+```
+Median per month
+
+```{r median-per-month}
+simple_aqs %>% 
+  mutate(month = month(date_local,
+                       label = T,
+                       abbr = T)) %>% 
+  group_by(month) %>% 
+  summarise(med_month = median(mean_measurement)) %>% 
+  ggplot() +
+    geom_bar(aes(x = month, y = med_month),fill = muted("Red"),
+             stat = "identity", alpha = 0.8) +
+    labs(x = "", y = "PM2.5", 
+         title = "Median PM2.5 per Month (2017 - 2021)",
          fill = "")  +
     scale_fill_brewer(palette = "Set3") +
     theme_minimal() +
@@ -320,7 +345,7 @@ simple_aqs %>%
   mutate(year = year(date_local)) %>%
   group_by(year) %>% 
   ggplot(aes(x = mean_measurement,fill = factor(year,))) +
-    geom_boxplot(position = "identity", binwidth = 0.7,
+    geom_boxplot(position = "identity",
                    alpha = 0.8) +
     facet_wrap(~year, scales = "free") +
     scale_fill_manual(values = brewer_pal(palette = 3)(7)[3:7]) +
@@ -329,6 +354,22 @@ simple_aqs %>%
     theme_minimal() +
     theme(legend.position = c(0.85, 0.2)) +
     coord_flip()
+```
+
+Look at this without `facet_wrap()`.
+
+```{r boxplot-no-facet}
+simple_aqs %>% 
+  mutate(year = year(date_local)) %>%
+  group_by(year) %>% 
+  ggplot(aes(y = mean_measurement, x = year,fill = factor(year,))) +
+    geom_boxplot(position = "identity",
+                   alpha = 0.8) +
+    scale_fill_manual(values = brewer_pal(palette = 3)(7)[3:7]) +
+    theme_minimal() +
+    labs(x = "", y = "", fill = "") +
+    theme_minimal() +
+    theme(legend.position = c(0.1, 0.85))
 ```
 
 Let's isolate 2021
@@ -361,6 +402,10 @@ Let's make this a time series and re-plot.
 ```{r create-ts-object}
 ts_nyc_2 <- ts(simple_aqs$mean_measurement, start = decimal_date(as.Date("2017-01-01")),
                frequency = 365)
+
+# save time series object
+saveRDS(ts_nyc_2,
+        file = "./data/ts_nyc.rds")
 ```
 
 Let's replot `ts()` object
