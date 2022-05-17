@@ -1,0 +1,13 @@
+prefix=/Users/justinwilliams/projects/air_quality_covid/envs
+exec_prefix=/Users/justinwilliams/projects/air_quality_covid/envs
+libdir=/Users/justinwilliams/projects/air_quality_covid/envs/lib
+sharedlibdir=/Users/justinwilliams/projects/air_quality_covid/envs/lib
+includedir=/Users/justinwilliams/projects/air_quality_covid/envs/include
+
+Name: zlib
+Description: zlib compression library
+Version: 1.2.12
+
+Requires:
+Libs: -L${libdir} -L${sharedlibdir} -lz
+Cflags: -I${includedir}

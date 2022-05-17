@@ -1,0 +1,14 @@
+prefix=/Users/justinwilliams/projects/air_quality_covid/envs
+exec_prefix=/Users/justinwilliams/projects/air_quality_covid/envs
+libdir=/Users/justinwilliams/projects/air_quality_covid/envs/lib
+includedir=/Users/justinwilliams/projects/air_quality_covid/envs/include
+
+Name: FreeType 2
+URL: https://freetype.org
+Description: A free, high-quality, and portable font engine.
+Version: 24.0.18
+Requires:
+Requires.private: 
+Libs: -L${libdir} -lfreetype
+Libs.private: -lz -L/Users/justinwilliams/projects/air_quality_covid/envs/lib -lpng16 -lz
+Cflags: -I${includedir}/freetype2
