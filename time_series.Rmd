@@ -1,0 +1,450 @@
+---
+title: "Time Series"
+author: "Justin Williams"
+date: "5/14/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load-apckages, warning=FALSE, message=FALSE, include=FALSE}
+library(tidyverse)
+library(lubridate)
+library(prophet)
+library(forecast)
+library(tseries)
+library(reticulate)
+```
+
+
+## Time Series
+
+This notebook will deal exclusively with time series analysis of the data.
+Lastly, it will compare the two datasets for similarities and differences. 
+    
+## Load Time Series Object
+
+```{r load-ts-object}
+ts_nyc <- readRDS(file = "./data/ts_nyc.rds")
+simple_aqs <- readRDS(file = "./data/simple_yearly/simple_aqs.rds")
+```
+
+Let's look at splitting off the first 3 years as train and last 2 as test
+
+```{r train-test}
+train_ts_nyc <- window(ts_nyc, start = decimal_date(as.Date("2017-01-01")), 
+                         end =decimal_date(as.Date("2019-12-31")))
+test_ts_nyc <- window(ts_nyc, start = decimal_date(as.Date("2020-01-01")), 
+                        end = decimal_date(as.Date("2021-12-31")))
+```
+
+View train/test split.
+
+```{r autoplot-train-test}
+#set custom colors
+cust <- c("#A63446","#0C6291")
+
+train_test_split <- autoplot(ts_nyc) +
+  autolayer(train_ts_nyc, series = "Train") +
+  autolayer(test_ts_nyc,
+            series = "Test") +
+  guides(color = guide_legend(title = "")) +
+  scale_color_manual(values = cust) +
+  labs(x = "", y = "PM2.5 (ug/m3)", 
+         title = "Train/Test Mean PM2.5 per Month") +
+  theme_minimal() +
+  theme(plot.title.position = "plot",
+        plot.title = element_text(hjust = 0.5),
+        panel.background = element_rect(fill = "white"),
+        plot.background = element_rect(fill = "white"))
+
+# save image
+ggsave(filename = "./images/train_test_split.png",
+       plot = train_test_split,
+       width = 10, height = 7)
+
+# preview
+train_test_split
+```
+
+### Random Walk
+
+Try with random walk.
+First have to decompose seasonally with Loess.
+Choose 6 months as seasonality trend.
+
+```{r random-walk}
+# decompose seasonally 
+train_stl <- stl(train_ts_nyc, s.window = 180)
+nyc_forecast <- forecast(train_stl, 
+                         method = "rwdrift", 
+                         h = 730)
+plot(nyc_forecast)
+```
+
+This is pretty bad, obviously need to do some transformations and statistical tests before I can forecast.
+
+## Python Modeling
+
+Try working with time series data in Python instead of R.
+
+```{python import_libraries, include=FALSE}
+import pandas as pd
+import numpy as np
+import math
+import datetime as dt
+import seaborn as sns
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+import scipy.stats as stats
+from dtaidistance import dtw
+from dtaidistance import dtw_visualisation as dtwvis
+from statsmodels.tsa.stattools import adfuller
+from statsmodels.tsa.seasonal import seasonal_decompose
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+from matplotlib.pylab import rcParams
+from statsmodels.tsa.stattools import acf, pacf
+```
+
+Import python script with modeling functions.
+
+```{r import-python-functions}
+source_python("./src/python_functions.py")
+```
+
+Convert data frame to pandas df.
+
+```{python convert-to-pandas}
+df = r.simple_aqs
+df.head()
+```
+
+### Inspect Stationarity
+
+```{python inspect-stationarity}
+# set rolling mean
+roll_mean = df["mean_measurement"].rolling(window=30, center=False).mean()
+
+
+# plot
+plot_time_series(df_col1=df["mean_measurement"], series2=roll_mean,
+                label1="Observed", label2="Rolling Mean",
+                plot_title='Monthly Rolling average PM2.5 by Year')
+```
+
+Current data contains definite seasonality and slight upward trend.
+There is a definite downtrend once 2020 hits, then an uptick in 2021.
+
+### Dickey Fuller Test
+
+```{python dickey-fuller-test}
+dickey_fuller(df["mean_measurement"])
+```
+
+P-value is pretty small so the series is already has stationarity. 
+
+### Remove trends
+
+Explore different methods for removing trends and seasonality such as, differencing, rolling means and various transformations. 
+
+Let's try log transformation.
+
+### Log Transformation
+
+One way to enforce stationarity can be to log transform the data, which penalizes higher values more then lower.
+
+```{python log-transform}
+# there is one negative value, ignore error
+old = np.seterr(invalid='ignore')
+
+log_roll_mean = np.log(df["mean_measurement"]).rolling(window=30, center=False).mean()
+log_data = np.log(df["mean_measurement"])
+
+plot_time_series(df_col1=log_data, series2=log_roll_mean,
+                label1="Observed", label2="Log Rolling Mean",
+                plot_title='Monthly Rolling average PM2.5 by Year (Log Transformed)')
+```
+
+### Check Stationarity
+
+```{python stationarity-check}
+log_data.dropna(inplace=True)
+dickey_fuller(log_data)
+```
+
+Definitely looks stationary now with a p-value of 0.000003.
+
+### Subtract Rolling Mean
+
+```{python subtract-rolling-mean}
+roll_mean = df["mean_measurement"].rolling(window=30, center=False).mean()
+data_minus_roll_mean = df["mean_measurement"] - roll_mean
+data_minus_roll_mean.head(30)
+```
+
+Drop missing values
+
+```{python drop-missing-rolling-mean}
+# Drop the missing values from time series calculated above
+data_minus_roll_mean.dropna(inplace=True)
+```
+
+Plot rolling mean.
+
+```{python rolling-mean-plot}
+# take rolling mean
+roll_mean = data_minus_roll_mean.rolling(window=30, center=False).mean()
+
+# create plot
+plot_time_series(df_col1=data_minus_roll_mean, series2=roll_mean,
+                label1="Observed", label2="Rolling Mean (Monthly)",
+                plot_title='Monthly Rolling average PM2.5 by Year (Minus Rolling Mean)')
+```
+
+### Check stationarity
+
+```{python stationarity-rolling-mean}
+dickey_fuller(data_minus_roll_mean)
+```
+
+Low p-value. 
+
+### Differencing
+
+Another method for dealing with trend and seasonality is differencing. We take the difference of an observation at a particular moment with that at the previous instant (lag).
+
+First-order differencing can be done in Pandas using `diff()` method, periods denotes 1 period lag.
+
+```{python differencing}
+# 1 period lag
+data_diff = df["mean_measurement"].diff(periods=1)
+
+# drop missing values
+data_diff.dropna(inplace = True)
+```
+
+Let's plot.
+
+```{python differencing_plot}
+# get rolling mean of lag
+roll_mean_lag = data_diff.rolling(window=30, center=False).mean()
+
+# create plot
+plot_time_series(df_col1=data_diff, series2=roll_mean_lag,
+                label1="Observed", label2="Rolling Mean",
+                plot_title='Monthly Rolling average PM2.5 by Year (Differenced)')
+```
+
+### Check Stationarity
+
+```{python dickey-fuller-differenced}
+dickey_fuller(data_diff)
+```
+
+This is a very small p-value, looks even smaller then the log transformation.
+Maybe we will go with this one?
+
+### Autocorrelation
+
+Autocorrelation refers to how correlated a time series is with its past values. Processes with greater autocorrelation are more predictable than those without any form of autocorrelation. This process compares each value in the time series with it's previous value. This is called "lag 1 autocorrelation".
+
+Let's split the data at this point into a Train and Test split.
+Train will be 2017 - 2020, and test will be 2020 - 2021. 
+This way we can see how a model would predict on data during the onset of the COVID-19 pandemic.
+
+```{python train-test}
+# set test size
+test_size = 730
+
+# split train and test set
+df_train = df[:-test_size]
+df_test = df[-test_size:]
+
+# plot result
+plot_time_series(df_col1=df_train["mean_measurement"],
+                series2=df_test["mean_measurement"],
+                label1="Training set", label2="Test set",
+                plot_title="Training Test set split")
+```
+
+
+
+```{python}
+# shift the series forward by 3 lag
+total = df_train['mean_measurement']
+total_shift_30 = total.shift(periods=30)
+lag_30 = pd.concat([total_shift_30, total], axis=1)
+lag_30.corr()
+```
+
+Let's plot!
+
+```{python autocorrelation-1-lag}
+lag_30.plot();
+plt.show();
+```
+
+Highest correlation was 365 days (1 year) but 30 days was second highest.
+These are not high $R$ values. Which suggests it is not a very predictable pattern.
+
+### Autocorrelation Function (ACF)
+
+The autocorrelation function (ACF) is the plot used to see the correlation between the points, up to and including the lag unit.
+
+  - It's a function that represents autocorrelation of a time series as a function of the time lag.
+  - lets you know how the given time series is correlated with itself.
+  - The dotted lines in the plot tell you about the statistical significance of the correlation.
+  
+```{python plot-acf}
+# set parameters
+rcParams['figure.figsize'] = 14, 5
+
+# create plot
+plot_acf(data_diff, lags=30, zero=False);
+plt.grid(color = "grey",linestyle = "--", alpha = 0.5)
+plt.title("Auto-correlation 30 lags", size = 20)
+plt.ylim((-0.5,0.5))
+plt.savefig("./images/acf_30.png")
+plt.show();
+```
+
+There are a few significant points. The earlier lags being the most sigificant.
+
+Differenced data seems a bit more stable. 
+
+### Partial Autocorrelation Function (PACF)
+
+PACF is a subset of ACF. PACF expresses the correlation between observations made at two points in time while accounting for any influence from other data points.(unlike the autocorrelation function, which does not control for other lags).
+
+  - PACF can be interpreted as a regression of the series against its past lags.
+  
+```{python pacf}
+plot_pacf(data_diff, lags=30, zero=False);
+plt.grid(color = "grey",linestyle = "--", alpha = 0.5)
+plt.title("Partial Auto-correlation 30 lags", size = 20)
+plt.ylim((-0.5,0.5))
+plt.savefig("./images/pacf_30.png")
+plt.show();
+```
+
+Any lag outside of confidence interval (blue shaded area) is significant.
+Looks like there are more significant ones then not. 
+
+Ok, next will go into comparing the Air Quality data with COVID case counts.
+
+## Time Series Comparisions
+
+Let's get segmented datasets into Python.
+
+```{python seg-python}
+# bring into python env
+covid = r.seg_covid
+aqs = r.seg_aqs
+
+# merge
+merged = pd.merge(covid, aqs)
+
+#drop date col
+merged = merged.drop("date", axis = 1)
+
+# normalize
+scaler = StandardScaler()
+scaled = scaler.fit_transform(merged.values)
+
+# bring back into dataframe
+merged[['cases','pm2.5']] = scaled
+merged = merged.drop("mean_measurement", axis = 1)
+merged["date"] = covid["date"]
+
+merged.head()
+```
+
+
+Ok, now that the cases and PM2.5 are standardizeed, we can make some comparisons.
+
+### Pearson correlation
+
+```{python pearson-correlation}
+overall_pearson_r = merged.corr().iloc[0,1]
+print(f"Pandas computed Pearson r: {overall_pearson_r}")
+```
+
+That's a pretty low correlation. let's try it with Scipy.
+
+```{python scipy-pearsons}
+r, p = stats.pearsonr(merged.dropna()["cases"], merged.dropna()["pm2.5"])
+print(f"Scipy computed Pearson r: {r} and p-value: {p}")
+```
+
+Pretty much the same value, let's plot it.
+(Need to prettify this plot with dates and all)
+
+```{python plot-pearsons}
+# set tick format
+years = mdates.YearLocator()   # every year
+months = mdates.MonthLocator()  # every month
+
+# set labels
+positions = [0,365,730]
+labels = ["2020","2021","2022"]
+
+fig,ax=plt.subplots()
+merged.rolling(window=30,center=True).\
+median().plot(ax=ax,color=["#A63446","#0C6291"],alpha = 0.8)
+ax.set(xticks=[x for x in merged.index.values if merged.index.get_loc(x)%365==0]);
+ax.set_ylabel("Pearson R", fontsize = 14)
+ax.set_xlabel("")
+ax.set_xticklabels(fontsize = 12)
+ax.set_title(f"Overall Pearson r = {np.round(overall_pearson_r,2)}",
+fontsize = 20);
+ax.legend(fontsize = 12)
+
+#format the ticks
+ax.xaxis.set_major_locator(years);
+ax.xaxis.set_minor_locator(months);
+plt.xticks(positions, labels, rotation=70);
+plt.legend(loc='best');
+plt.savefig(fname = "./images/pearsons_r.png",dpi=300)
+plt.show()
+```
+
+Oddly, doesn't look that correlated, but almost looks the opposite. Perhaps there is a type of call and response effect. However, it does not provide insights into signal dynamics such as which signal occurs first. This can be measured via cross correlations.
+
+### Time Lagged Cross Correlation (TLCC)
+
+TLCC can help identify directionality between two signals. Such that one leads and the other follows. This may be the type of pattern observed above. This still does not necessarily reflect true causality, however we can extract a sense of which signal comes first.
+
+```{python TLCC}
+d1 = merged['cases']
+d2 = merged['pm2.5']
+cases = 5
+pm25 = 30
+rs = [crosscorr(d1,d2, lag) for lag in range(-int(cases*pm25),int(cases*pm25+1))]
+offset = np.floor(len(rs)/2)-np.argmax(rs)
+
+# plot
+f,ax=plt.subplots(figsize=(14,3))
+ax.plot(rs, color = "#0C6291", alpha = 0.8)
+ax.axvline(np.ceil(len(rs)/2),color="k",linestyle='--',label='Center')
+ax.axvline(np.argmax(rs),color="#A63446",linestyle='--',label='Peak synchrony')
+ax.set_title(f'Offset = {offset} days\nCases lead <> PM2.5 lead',
+              fontsize = 14)
+ylim=[-0.25,0.25],xlim=[0,301], 
+xlabel='Offset',ylabel='Pearson r')
+
+ax.set_xticks()
+ax.set_xticklabels([-600, -300, -150, 0, 150, 300, 600]);
+plt.legend();
+plt.savefig("./images/tlcc.png", dpi=300)
+plt.show();
+
+```
+
+
+
+
+
+
